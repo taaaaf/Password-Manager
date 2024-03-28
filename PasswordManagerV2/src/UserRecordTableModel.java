@@ -1,0 +1,130 @@
+
+import java.util.ArrayList;
+import java.util.List;
+import javax.swing.table.AbstractTableModel;
+
+public class UserRecordTableModel extends AbstractTableModel {
+
+	private static final long serialVersionUID = 1L;
+
+	private final List<UserRecord> oldRecordList;
+	private final List<UserRecord> recordList;
+
+	private final String[] columnNames = new String[] { "Label", "Username", "Password", "URL", "Exposure Status", "" };
+	private final Class[] columnClass = new Class[] { String.class, String.class, String.class, String.class,
+			String.class, String.class };
+
+	public UserRecordTableModel(List<UserRecord> recordList) { 
+		this.recordList = recordList;
+		
+		oldRecordList = new ArrayList<>();
+		updateRecords();
+	}
+
+	public Boolean isRowDeleted(int row) {
+
+		UserRecord record = recordList.get(row);
+		return record.isDeleted;
+
+	}
+
+	public void updateRecords() {
+		for (int i = 0; i < recordList.size(); ++i) {
+			if (recordList.get(i).isDeleted) {
+				recordList.remove(i);
+				--i;
+			}
+		}
+
+		oldRecordList.clear();
+		recordList.forEach((record) -> {
+			UserRecord newRecord = new UserRecord(record.label, record.password);
+
+			newRecord.username = record.username;
+			newRecord.URL = record.URL;
+			newRecord.isPwned = record.isPwned;
+			oldRecordList.add(newRecord);
+		});
+	}
+
+	@Override
+	public String getColumnName(int column) {
+		return columnNames[column];
+	}
+
+	@Override
+	public Class<?> getColumnClass(int columnIndex) {
+		return columnClass[columnIndex];
+	}
+
+	@Override
+	public int getColumnCount() {
+		return columnNames.length;
+	}
+
+	@Override
+	public int getRowCount() {
+		return recordList.size();
+	}
+
+	@Override
+	public Object getValueAt(int rowIndex, int columnIndex) {
+		UserRecord oldRow = oldRecordList.size() > rowIndex ? oldRecordList.get(rowIndex) : null;
+		UserRecord row = recordList.get(rowIndex);
+		if (0 == columnIndex) {
+			return row.label;
+		} else if (1 == columnIndex) {
+			return row.username;
+		} else if (2 == columnIndex) {
+			return (row.password);
+		} else if (3 == columnIndex) {
+			return row.URL;
+		} else if (4 == columnIndex) {
+			return row.isPwned ? "Exposed" : "Safe";
+		} else if (5 == columnIndex) {
+			if (row.isDeleted) {
+				return "Deleted";
+			}
+			return oldRow == null || isUnsaved(row, oldRow) ? "Unsaved" : "";
+
+		}
+		return null;
+	}
+
+	private boolean isUnsaved(UserRecord row, UserRecord oldRow) {
+		return row.label != oldRow.label || row.username != oldRow.username || row.password != oldRow.password
+				|| row.URL != oldRow.URL;
+
+	}
+
+	@Override
+	public void setValueAt(Object aValue, int rowIndex, int columnIndex) {
+		if (rowIndex >= recordList.size()) {
+			return;
+		}
+		UserRecord row = recordList.get(rowIndex);
+		if (0 == columnIndex) {
+			row.label = ((String) aValue);
+		} else if (1 == columnIndex) {
+			row.username = ((String) aValue);
+		} else if (2 == columnIndex) {
+			row.password = ((String) aValue);
+		} else if (3 == columnIndex) {
+			row.URL = ((String) aValue);
+		}
+		fireTableRowsUpdated(rowIndex, rowIndex);
+	}
+
+	public void removeRow(int rowIndex) {
+		UserRecord row = recordList.get(rowIndex);
+		row.isDeleted = true;
+		fireTableCellUpdated(rowIndex, 5);
+	}
+
+	@Override
+	public boolean isCellEditable(int row, int column) {
+		// Allow editing
+		return column < 4;
+	}
+
+}

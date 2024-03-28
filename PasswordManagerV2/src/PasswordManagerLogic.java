@@ -1,0 +1,462 @@
+import java.security.*;
+import java.util.HashMap;
+import java.util.Map;
+import javax.swing.*;
+import javax.swing.event.ListSelectionEvent;
+import javax.swing.event.ListSelectionListener;
+import javax.swing.event.TableModelEvent;
+import javax.swing.event.TableModelListener;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.logging.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.SecretKeySpec;
+
+import java.util.Base64;
+
+public class PasswordManagerLogic {
+	private static final Logger LOGGER = Logger.getLogger(PasswordManagerLogic.class.getName());
+	private static Map<String, byte[]> database = new HashMap<>(); // database
+	private static UserData loggedInUser = null;
+	private static String loggedInPassword = null;
+	private static String loggedInUsername = null;
+
+	public static void createAccount() {
+
+		String username = JOptionPane.showInputDialog(null, "Enter your username:");
+		if (username == null || username.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "Username cannot be empty.");
+			return;
+		}
+
+		if (database.containsKey(username)) {
+			JOptionPane.showMessageDialog(null, "Username already exists. Choose a different username.");
+			return;
+		}
+
+		String password = JOptionPane.showInputDialog(null, "Enter your password:");
+		if (password == null || password.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "Password cannot be empty.");
+			return;
+		}
+
+		commitUserData(username, password, new UserData());
+
+		JOptionPane.showMessageDialog(null, "Account created successfully.");
+
+	}
+
+	private static Boolean commitUserData(String username, String userPassword, UserData userData) {
+
+		byte[] userDataBytes = serialize(userData);
+		byte[] passwordBytes = userPassword.getBytes();
+
+		// Create cipher instance and initialize for encryption
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			byte[] hash = digest.digest(passwordBytes);
+			// Generate AES key from the password
+			Key key = new SecretKeySpec(hash, "AES");
+			Cipher cipher = Cipher.getInstance("AES");
+			cipher.init(Cipher.ENCRYPT_MODE, key);
+
+			// Encrypt the data
+			byte[] encryptedData = cipher.doFinal(userDataBytes);
+			database.put(username, encryptedData);
+
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
+		return false;
+
+	}
+
+	static byte[] serialize(final Object obj) {
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+
+		try (ObjectOutputStream out = new ObjectOutputStream(bos)) {
+			out.writeObject(obj);
+			out.flush();
+			return bos.toByteArray();
+		} catch (Exception ex) {
+			throw new RuntimeException(ex);
+		}
+	}
+
+	static Object deserialize(byte[] bytes) {
+		ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
+
+		try (ObjectInput in = new ObjectInputStream(bis)) {
+			return in.readObject();
+		} catch (Exception ex) {
+			throw new RuntimeException(ex);
+		}
+	}
+
+	public static Boolean login(JFrame frame) {
+
+		String username = JOptionPane.showInputDialog(null, "Enter your username:");
+		if (username == null || username.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "Username cannot be empty.");
+			return false;
+		}
+
+		if (!database.containsKey(username)) {
+			JOptionPane.showMessageDialog(null, "Username not found. Please create an account first.");
+			return false;
+		}
+
+		String password = JOptionPane.showInputDialog(null, "Enter your password:");
+		if (password == null || password.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "Password cannot be empty.");
+			return false;
+
+		}
+
+		try {
+			byte[] encryptedUserData = database.get(username);
+			UserData userData = checkCredentials(encryptedUserData, password);
+			if (userData != null) {
+				JOptionPane.showMessageDialog(null, "Login successful. Welcome, " + username + "!");
+				loggedInUser = userData;
+				loggedInPassword = password;
+				loggedInUsername = username;
+				boolean isPasswordPwned = PwnedAPI.isPasswordPwned(password);
+				if (isPasswordPwned) {
+					JOptionPane.showMessageDialog(null, "Password has been found in databreach");
+				}
+				return viewEnteredPasswords(frame);
+			} else {
+				JOptionPane.showMessageDialog(null, "Incorrect password. Please try again.");
+			}
+		} catch (Exception e) {
+			LOGGER.log(Level.SEVERE, "Error during login process", e);
+			JOptionPane.showMessageDialog(null, "An unexpected error occurred during login. Please try again.");
+		}
+		return false;
+	}
+
+	public static Map<String, byte[]> loadDatabaseFromFile() {
+		try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream("database.dat"))) {
+			Object obj = ois.readObject();
+			if (obj instanceof Map) {
+				database = (Map<String, byte[]>) obj;
+				// Debug: Print out contents of loaded database map
+				System.out.println("Loaded passwords: " + database);
+				System.out.println("Passwords loaded from file."); // Add this line for debugging
+				return database;
+
+			}
+		} catch (FileNotFoundException e) {
+			System.err.println("File not found: database.dat");
+			e.printStackTrace();
+		} catch (IOException | ClassNotFoundException e) {
+			System.err.println("Error loading passwords from file: " + e.getMessage());
+			e.printStackTrace();
+		}
+		System.out.println("Loaded passwords: " + database);
+		return new HashMap<String, byte[]>();
+	}
+
+	public static Boolean viewEnteredPasswords(JFrame frame) {
+
+		if (loggedInUser == null || loggedInUser.userRecords.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "No passwords stored.");
+			return false;
+		}
+		loggedInUser.userRecords.forEach((record) -> {
+
+			record.isPwned = PwnedAPI.isPasswordPwned(record.password);
+
+		});
+
+		UserRecordTableModel tableModel = new UserRecordTableModel(loggedInUser.userRecords);
+
+		JTable table = new JTable(tableModel);
+		// Panel for buttons
+		JPanel buttonPanel = new JPanel();
+		JButton removeButton = new JButton("Remove");
+		JButton saveButton = new JButton("Save");
+		JButton addButton = new JButton("Add");
+		JButton exportButton = new JButton("Export");
+		JButton logOutButton = new JButton("Log out");
+		
+		removeButton.setEnabled(false);
+		saveButton.setEnabled(false);
+
+		table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
+
+			@Override
+			public void valueChanged(ListSelectionEvent e) {
+				int row = table.getSelectedRow();
+				Boolean enabled = row != -1 && !tableModel.isRowDeleted(row);
+				removeButton.setEnabled(enabled);
+
+			}
+		});
+
+		tableModel.addTableModelListener(new TableModelListener() {
+
+			@Override
+			public void tableChanged(TableModelEvent e) {
+				saveButton.setEnabled(true);
+				exportButton.setEnabled(false);
+			}
+
+		});
+
+		removeButton.addActionListener(e -> {
+			int row = table.getSelectedRow();
+
+			if (row >= 0) {
+				int confirm = JOptionPane.showConfirmDialog(null, "Are you sure you want to remove this password?",
+						"Confirm Removal", JOptionPane.YES_NO_OPTION);
+				if (confirm == JOptionPane.YES_OPTION) {
+
+					tableModel.removeRow(row);
+					removeButton.setEnabled(false);
+				}
+			}
+		});
+
+		saveButton.addActionListener(e -> {
+
+			tableModel.updateRecords();
+			commitUserData(loggedInUsername, loggedInPassword, loggedInUser);
+			PasswordManagerLogic.saveDatabaseToFile();
+
+			JOptionPane.showMessageDialog(null, "Passwords saved successfully.");
+			table.repaint(); // Refresh table display
+
+			saveButton.setEnabled(false);
+			exportButton.setEnabled(true);
+		});
+
+		addButton.addActionListener(e -> {
+			addNewPassword();
+			int numRows = loggedInUser.userRecords.size();
+			tableModel.fireTableRowsInserted(numRows, numRows);
+		});
+
+		exportButton.addActionListener(e -> {
+			JFileChooser fileChooser = new JFileChooser();
+			fileChooser.setDialogTitle("Export As");
+			int userSelection = fileChooser.showSaveDialog(frame);
+			try {
+				if (userSelection == JFileChooser.APPROVE_OPTION) {
+					File fileToSave = fileChooser.getSelectedFile();
+					OutputStream stream = new FileOutputStream(fileToSave);
+					byte[] userData = database.get(loggedInUsername);
+					stream.write(userData);
+					stream.close();
+				}
+			} catch (Exception ex) {
+				ex.printStackTrace();
+				JOptionPane.showMessageDialog(null, "Unexpected error exporting passwords.");
+			}
+
+		});
+		
+		logOutButton.addActionListener(e -> {
+			
+			login(frame);
+			
+		});
+
+		buttonPanel.add(removeButton);
+		buttonPanel.add(saveButton);
+		buttonPanel.add(addButton);
+		buttonPanel.add(exportButton);
+		buttonPanel.add(logOutButton);
+	
+		// Setup frame to display the table and buttons
+
+		frame.setTitle("Stored Passwords");
+		frame.setLayout(new BorderLayout());
+		frame.add(new JScrollPane(table), BorderLayout.CENTER);
+		frame.add(buttonPanel, BorderLayout.SOUTH);
+		frame.pack();
+		frame.setVisible(true);
+
+		return true;
+	}
+
+	public static void addNewPassword() {
+		if (loggedInUser == null) {
+			JOptionPane.showMessageDialog(null, "Please log in first.");
+			return;
+		}
+
+		String label = JOptionPane.showInputDialog(null, "Enter a label for the new password:");
+		if (label == null || label.isEmpty()) {
+			JOptionPane.showMessageDialog(null, "Label cannot be empty.");
+			return;
+		}
+
+		// Options for the user
+		Object[] options = { "Generate Random Password", "Enter My Own" };
+		int choice = JOptionPane.showOptionDialog(null,
+				"Would you like to generate a random password or enter your own?", "Password Option",
+				JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
+
+		String newPassword;
+		if (choice == JOptionPane.YES_OPTION) {
+			// Generate a random password
+			newPassword = passwordGenerator(16);
+			JOptionPane.showMessageDialog(null, "Generated Password: " + newPassword);
+		} else {
+			// Prompt the user to enter a password
+			newPassword = JOptionPane.showInputDialog(null, "Enter the new password:");
+			if (newPassword == null || newPassword.isEmpty()) {
+				JOptionPane.showMessageDialog(null, "Password cannot be empty.");
+				return;
+			}
+
+		}
+
+		boolean isNewPwPwned = PwnedAPI.isPasswordPwned(newPassword);
+
+		if (isNewPwPwned == true) {
+
+			JOptionPane.showMessageDialog(null, "Password has been found in data breach");
+
+//			JOptionPane.showMessageDialog(null, "Please choose a new password");
+//			return;
+
+		}
+
+//		else {
+//			JOptionPane.showMessageDialog(null, "Password not found in data breach");
+		UserRecord record = new UserRecord(label, newPassword);
+		record.isPwned = isNewPwPwned;
+		loggedInUser.userRecords.add(record);
+
+		JOptionPane.showMessageDialog(null, "Password added/updated successfully.");
+	}
+
+	public static void saveDatabaseToFile() {
+		try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("database.dat"))) {
+			// Debug: Print out contents of database map
+			System.out.println("Saving passwords: " + database);
+			oos.writeObject(database);
+			System.out.println("Passwords saved to file."); // Add this line for debugging
+		} catch (IOException e) {
+			System.err.println("Error saving passwords to file: " + e.getMessage());
+			e.printStackTrace();
+
+		}
+		System.out.println("Passwords to be saved: " + database);
+	}
+
+	public static void testPasswordStrength(String password) {
+		int strengthScore = pwStrength(password);
+
+		if (strengthScore <= 3) {
+			JOptionPane.showMessageDialog(null, "Weak Password");
+		} else if (strengthScore >= 4 && strengthScore < 6) {
+			JOptionPane.showMessageDialog(null, "Medium Strength Password");
+		} else {
+			JOptionPane.showMessageDialog(null, "Strong Password");
+		}
+	}
+
+	private static int pwStrength(String pw) {
+		int pwScore = 0;
+
+		int length = pw.length();
+
+		if (length >= 8 && length <= 10) {
+			pwScore += 1;
+		} else if (length >= 11 && length <= 15) {
+			pwScore += 2;
+		} else if (length >= 16) {
+			pwScore += 3;
+		}
+
+		if (pw.matches("(?=.*[a-z]).*")) {
+			pwScore++; // regex check lowercase
+		}
+
+		if (pw.matches("(?=.*[A-Z]).*")) {
+			pwScore++; // regex check uppercase
+		}
+
+		if (pw.matches("(?=.*[0-9]).*")) {
+			pwScore++; // regex check numbers
+		}
+
+		if (pw.matches("(?=.*[!@#?$%^&*]).*")) {
+			pwScore++; // regex check special characters
+		}
+
+		return pwScore;
+	}
+
+	private static String passwordGenerator(int length) {
+
+		String lowerCase = "qwertyuiopasdfghjklzxcvbnm";
+		String upperCase = "QWERTYUIOPASDFGHJKLZXCVBNM";
+		String specialChar = "!£$%^&*?@#";
+
+		StringBuilder pwGen = new StringBuilder();
+
+		for (int i = 0; i < length; i++) {
+			int rand = (int) (3 * Math.random());
+			switch (rand) {
+			case 0:
+				pwGen.append((int) (10 * Math.random()));
+				break;
+			case 1:
+				rand = (int) (lowerCase.length() * Math.random());
+				pwGen.append(lowerCase.charAt(rand));
+				break;
+			case 2:
+				rand = (int) (upperCase.length() * Math.random());
+				pwGen.append(upperCase.charAt(rand));
+			case 3:
+				rand = (int) (specialChar.length() * Math.random());
+				pwGen.append(specialChar.charAt(rand));
+				break;
+
+			}
+		}
+
+		return pwGen.toString();
+
+	}
+
+	public static UserData checkCredentials(byte[] encryptedUserData, String password) {
+		byte[] passwordBytes = password.getBytes();
+
+		// Generate AES key from the password
+
+		// Create cipher instance and initialize for encryption
+
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			byte[] hash = digest.digest(passwordBytes);
+			Key key = new SecretKeySpec(hash, "AES");
+			Cipher cipher = Cipher.getInstance("AES");
+			// Decryption
+			cipher.init(Cipher.DECRYPT_MODE, key);
+			byte[] decryptedData = cipher.doFinal(encryptedUserData);
+			UserData userData = (UserData) deserialize(decryptedData);
+			return userData;
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+
+		}
+
+		return null;
+
+	}
+}

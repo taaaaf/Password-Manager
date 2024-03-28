@@ -1,0 +1,18 @@
+import java.io.Serializable;
+
+public class UserRecord implements Serializable {
+
+	private static final long serialVersionUID = 1L;
+	public UserRecord(String label, String password) {
+		this.label = label;
+		this.password = password;
+		isDeleted = false;
+	}
+
+	public String label;
+	public String username;
+	public String URL;
+	public String password;
+	public Boolean isPwned;
+	public Boolean isDeleted;
+}
